@@ -113,7 +113,10 @@ let navigationAudio;
 context.Audio = class {
   constructor() { navigationAudio = this; this.paused = true; this.currentTime = 0; }
   pause() { this.paused = true; }
-  async play() { this.paused = false; }
+  async play() {
+    if (this.rejectPlay) throw new Error('Playback blocked');
+    this.paused = false;
+  }
 };
 elements['#sound-toggle'] = {
   setAttribute() {}, addEventListener(type, fn) { this.click = fn; }
@@ -138,6 +141,14 @@ async function checkNavigationAudio() {
   vm.runInContext('audible.hold(true);', context);
   await elements['#sound-toggle'].click();
   assert.equal(navigationAudio.paused, false, 'Sound can be enabled during a camera move');
+  await elements['#sound-toggle'].click();
+  navigationAudio.rejectPlay = true;
+  await elements['#sound-toggle'].click();
+  assert.equal(elements['#sound-toggle'].textContent, 'Retry sound');
+  assert.equal(elements['#sound-toggle'].disabled, false, 'Playback failure permits retry');
+  navigationAudio.rejectPlay = false;
+  await elements['#sound-toggle'].click();
+  assert.equal(navigationAudio.paused, false, 'A subsequent tap retries playback');
   console.log('Passed: continuous navigation audio, day boundaries, explicit pause and mute.');
 }
 checkNavigationAudio().catch(error => { console.error(error); process.exitCode = 1; });

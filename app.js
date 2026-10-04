@@ -82,7 +82,6 @@ class ParkingSound {
     this.audio.volume = 0.65;
     this.audio.preservesPitch = true;
     this.audio.webkitPreservesPitch = true;
-    this.audio.currentTime = 0;
     this.rate = 1;
     this.previousPulse = null;
     this.starting = false;
@@ -93,7 +92,7 @@ class ParkingSound {
     this.audio.pause();
     this.previousPulse = null;
     if (reset) {
-      this.audio.currentTime = 0;
+      if (this.audio.currentTime > 0) this.audio.currentTime = 0;
       this.rate = 1;
       this.audio.playbackRate = 1;
     }
@@ -137,6 +136,15 @@ function startPlayback(events, sensors, points, initiallyPlaying = true, soundVi
   let previous = performance.now();
   let frame;
 
+  function soundFailed(error) {
+    soundEnabled = false;
+    sound?.clear();
+    soundToggle.setAttribute('aria-pressed', 'false');
+    soundToggle.setAttribute('aria-label', 'Retry enabling sound');
+    soundToggle.textContent = 'Retry sound';
+    console.warn('Audio playback failed:', error);
+  }
+
   if (soundToggle) {
     soundToggle.disabled = false;
     soundToggle.addEventListener('click', async () => {
@@ -150,12 +158,8 @@ function startPlayback(events, sensors, points, initiallyPlaying = true, soundVi
           sound = new ParkingSound();
         }
         if (playing) await sound.resume();
-      } catch {
-        soundEnabled = false;
-        soundToggle.setAttribute('aria-pressed', 'false');
-        soundToggle.setAttribute('aria-label', 'Sound unavailable');
-        soundToggle.textContent = 'No audio';
-        soundToggle.disabled = true;
+      } catch (error) {
+        soundFailed(error);
       }
     });
   }
@@ -194,7 +198,7 @@ function startPlayback(events, sensors, points, initiallyPlaying = true, soundVi
     playing = !playing;
     updateToggle();
     if (playing) {
-      if (soundEnabled && sound) sound.resume().catch(() => {});
+      if (soundEnabled && sound) sound.resume().catch(soundFailed);
       previous = performance.now();
       frame = requestAnimationFrame(tick);
     } else { cancelAnimationFrame(frame); sound?.clear(); }
@@ -203,6 +207,7 @@ function startPlayback(events, sensors, points, initiallyPlaying = true, soundVi
     simulated = 0;
     model.reset();
     sound?.clear(true);
+    if (playing && soundEnabled && sound) sound.resume().catch(soundFailed);
     previous = performance.now();
     paint(); // Restart preserves the current play/pause choice.
   });

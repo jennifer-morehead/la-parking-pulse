@@ -12,6 +12,14 @@ class FakeAudio {
   async play() { if (this.loading) await this.loading; this.paused = false; }
 }
 async function main() {
+  const unloadedAudio = new FakeAudio();
+  Object.defineProperty(unloadedAudio, 'currentTime', {
+    get() { return 0; },
+    set() { throw new Error('Cannot seek before audio metadata is loaded'); }
+  });
+  const unloadedSound = new ParkingSound(unloadedAudio);
+  unloadedSound.clear(true);
+  assert.equal(unloadedAudio.paused, true, 'Initialization and restart avoid seeking unloaded audio');
   const sensors = [{SpaceID: 'A'}, {SpaceID: 'B'}];
   const states = new Map([['A', {state: 'OCCUPIED'}], ['B', {state: null}]]);
   assert.equal(occupancyRhythm(states, sensors).ratio, 0.5);
