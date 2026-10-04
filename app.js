@@ -135,64 +135,87 @@ class ParkingSound {
   }
 }
 
-// iOS media-element speed changes can repeatedly stall playback. A decoded
-// buffer loops on the audio clock and changes rate without restarting a player.
+// iOS uses pitch-preserving tempo renders at their native sample rate.
+// Switching buffers with a short crossfade avoids media-player rate stalls.
 class BufferedParkingSound {
   constructor(context = new (globalThis.AudioContext || globalThis.webkitAudioContext)()) {
     this.context = context;
     this.gain = context.createGain();
     this.gain.gain.value = 0.65;
     this.gain.connect(context.destination);
-    this.buffer = null;
-    this.loading = null;
+    this.buffers = new Map();
+    this.loading = new Map();
+    this.voices = new Set();
     this.source = null;
+    this.voiceGain = null;
     this.starting = false;
     this.wanted = false;
-    this.offset = 0;
-    this.rate = this.target = 1;
+    this.offset = 0; // Fraction of one musical loop, independent of tempo.
+    this.index = 10;
+    this.rate = 1;
     this.rateTime = context.currentTime;
+    this.previousPulse = null;
+    this.lastSwitch = -Infinity;
   }
-  async loadBuffer() {
-    if (this.buffer) return this.buffer;
-    if (!this.loading) {
-      this.loading = (async () => {
-        const response = await fetch('assets/looperman-dark-synth-seamless.wav');
+  async loadBuffer(index) {
+    if (this.buffers.has(index)) return this.buffers.get(index);
+    if (!this.loading.has(index)) {
+      const path = index === 10 ? 'assets/looperman-dark-synth-seamless.wav'
+        : `assets/tempo/loop-${index}.wav`;
+      this.loading.set(index, (async () => {
+        const response = await fetch(path);
         if (!response.ok) throw new Error(`Audio download failed (${response.status})`);
-        this.buffer = await this.context.decodeAudioData(await response.arrayBuffer());
-        return this.buffer;
-      })().finally(() => { this.loading = null; });
+        const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
+        this.buffers.set(index, buffer);
+        return buffer;
+      })().finally(() => { this.loading.delete(index); }));
     }
-    return this.loading;
+    return this.loading.get(index);
   }
-  // Integrate the same exponential rate ramp used by the audio engine so
-  // pause/resume retains the correct position even while speed is changing.
   advance(now) {
-    const elapsed = Math.max(0, now - this.rateTime);
     if (this.source) {
-      const decay = Math.exp(-elapsed / 0.25);
-      this.offset = (this.offset + this.target * elapsed +
-        (this.rate - this.target) * 0.25 * (1 - decay)) % this.buffer.duration;
-      this.rate = this.target + (this.rate - this.target) * decay;
+      this.offset = (this.offset + Math.max(0, now - this.rateTime) /
+        this.source.buffer.duration) % 1;
     }
+    this.rateTime = now;
+  }
+  startVoice(buffer, fade = false) {
+    const now = this.context.currentTime;
+    const source = this.context.createBufferSource();
+    const gain = this.context.createGain();
+    source.buffer = buffer;
+    source.loop = true;
+    // Keep playbackRate at its default 1: tempo is baked in, pitch is stable.
+    source.connect(gain);
+    gain.connect(this.gain);
+    gain.gain.setValueAtTime(fade ? 0 : 1, now);
+    if (fade) gain.gain.linearRampToValueAtTime(1, now + 0.18);
+    const voice = { source, gain };
+    this.voices.add(voice);
+    source.onended = () => {
+      source.disconnect(); gain.disconnect(); this.voices.delete(voice);
+    };
+    source.start(0, this.offset * buffer.duration);
+    this.source = source;
+    this.voiceGain = gain;
     this.rateTime = now;
   }
   async resume() {
     this.wanted = true;
-    // Call resume inside the tap handler, before fetching/decoding the WAV.
+    // Unlock the audio clock inside the tap, before downloading audio.
     const resumed = this.context.resume();
     if (this.starting || this.source) { await resumed; return; }
     this.starting = true;
     try {
-      await Promise.all([resumed, this.loadBuffer()]);
+      await Promise.all([resumed, this.loadBuffer(this.index)]);
       if (!this.wanted) return;
-      this.source = this.context.createBufferSource();
-      this.source.buffer = this.buffer;
-      this.source.loop = true;
-      this.source.connect(this.gain);
-      this.rateTime = this.context.currentTime;
-      this.source.playbackRate.setValueAtTime(this.rate, this.rateTime);
-      this.source.playbackRate.setTargetAtTime(this.target, this.rateTime, 0.25);
-      this.source.start(0, this.offset);
+      const buffer = await this.loadBuffer(this.index);
+      if (!this.wanted) return;
+      this.startVoice(buffer);
+      // Start promptly; other tempos download while the first loop plays.
+      for (let index = 8; index <= 14; index++) {
+        this.loadBuffer(index).catch(error => console.warn('Tempo audio unavailable:', error));
+      }
     } finally {
       this.starting = false;
     }
@@ -200,24 +223,32 @@ class BufferedParkingSound {
   clear(reset = false) {
     this.wanted = false;
     this.advance(this.context.currentTime);
-    if (this.source) {
-      this.source.stop();
-      this.source.disconnect();
-      this.source = null;
+    for (const voice of this.voices) {
+      voice.source.onended = null;
+      voice.source.stop(); voice.source.disconnect(); voice.gain.disconnect();
     }
-    if (reset) { this.offset = 0; this.rate = this.target = 1; }
+    this.voices.clear();
+    this.source = this.voiceGain = null;
+    this.previousPulse = null;
+    if (reset) { this.offset = 0; this.rate = 1; this.index = 10; this.lastSwitch = -Infinity; }
   }
-  pulse(snapshot) {
+  pulse(snapshot, now) {
     if (!this.source) return;
     const target = 0.8 + 0.6 * snapshot.ratio;
-    if (Math.abs(target - this.target) < 0.001) return;
-    const now = this.context.currentTime;
-    this.advance(now);
-    const param = this.source.playbackRate;
-    param.cancelScheduledValues(now);
-    param.setValueAtTime(this.rate, now);
-    param.setTargetAtTime(target, now, 0.25);
-    this.target = target;
+    const elapsed = this.previousPulse === null ? 16 : Math.min(100, Math.max(0, now - this.previousPulse));
+    this.previousPulse = now;
+    this.rate += (target - this.rate) * (1 - Math.exp(-elapsed / 250));
+    const index = Math.max(8, Math.min(14, Math.round(this.rate * 10)));
+    const time = this.context.currentTime;
+    if (index === this.index || !this.buffers.has(index) || time - this.lastSwitch < 0.5) return;
+    this.advance(time);
+    const previous = this.source;
+    this.voiceGain.gain.setValueAtTime(1, time);
+    this.voiceGain.gain.linearRampToValueAtTime(0, time + 0.18);
+    this.startVoice(this.buffers.get(index), true);
+    previous.stop(time + 0.18);
+    this.index = index;
+    this.lastSwitch = time;
   }
 }
 
