@@ -135,6 +135,100 @@ class ParkingSound {
   }
 }
 
+// iOS media-element speed changes can repeatedly stall playback. A decoded
+// buffer loops on the audio clock and changes rate without restarting a player.
+class BufferedParkingSound {
+  constructor(context = new (globalThis.AudioContext || globalThis.webkitAudioContext)()) {
+    this.context = context;
+    this.gain = context.createGain();
+    this.gain.gain.value = 0.65;
+    this.gain.connect(context.destination);
+    this.buffer = null;
+    this.loading = null;
+    this.source = null;
+    this.starting = false;
+    this.wanted = false;
+    this.offset = 0;
+    this.rate = this.target = 1;
+    this.rateTime = context.currentTime;
+  }
+  async loadBuffer() {
+    if (this.buffer) return this.buffer;
+    if (!this.loading) {
+      this.loading = (async () => {
+        const response = await fetch('assets/looperman-dark-synth-seamless.wav');
+        if (!response.ok) throw new Error(`Audio download failed (${response.status})`);
+        this.buffer = await this.context.decodeAudioData(await response.arrayBuffer());
+        return this.buffer;
+      })().finally(() => { this.loading = null; });
+    }
+    return this.loading;
+  }
+  // Integrate the same exponential rate ramp used by the audio engine so
+  // pause/resume retains the correct position even while speed is changing.
+  advance(now) {
+    const elapsed = Math.max(0, now - this.rateTime);
+    if (this.source) {
+      const decay = Math.exp(-elapsed / 0.25);
+      this.offset = (this.offset + this.target * elapsed +
+        (this.rate - this.target) * 0.25 * (1 - decay)) % this.buffer.duration;
+      this.rate = this.target + (this.rate - this.target) * decay;
+    }
+    this.rateTime = now;
+  }
+  async resume() {
+    this.wanted = true;
+    // Call resume inside the tap handler, before fetching/decoding the WAV.
+    const resumed = this.context.resume();
+    if (this.starting || this.source) { await resumed; return; }
+    this.starting = true;
+    try {
+      await Promise.all([resumed, this.loadBuffer()]);
+      if (!this.wanted) return;
+      this.source = this.context.createBufferSource();
+      this.source.buffer = this.buffer;
+      this.source.loop = true;
+      this.source.connect(this.gain);
+      this.rateTime = this.context.currentTime;
+      this.source.playbackRate.setValueAtTime(this.rate, this.rateTime);
+      this.source.playbackRate.setTargetAtTime(this.target, this.rateTime, 0.25);
+      this.source.start(0, this.offset);
+    } finally {
+      this.starting = false;
+    }
+  }
+  clear(reset = false) {
+    this.wanted = false;
+    this.advance(this.context.currentTime);
+    if (this.source) {
+      this.source.stop();
+      this.source.disconnect();
+      this.source = null;
+    }
+    if (reset) { this.offset = 0; this.rate = this.target = 1; }
+  }
+  pulse(snapshot) {
+    if (!this.source) return;
+    const target = 0.8 + 0.6 * snapshot.ratio;
+    if (Math.abs(target - this.target) < 0.001) return;
+    const now = this.context.currentTime;
+    this.advance(now);
+    const param = this.source.playbackRate;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(this.rate, now);
+    param.setTargetAtTime(target, now, 0.25);
+    this.target = target;
+  }
+}
+
+function createParkingSound() {
+  const ios = typeof navigator !== 'undefined' &&
+    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+  return ios && (globalThis.AudioContext || globalThis.webkitAudioContext)
+    ? new BufferedParkingSound() : new ParkingSound();
+}
+
 function startPlayback(events, sensors, points, initiallyPlaying = true, soundView = () => ({ sensors })) {
   const model = new SensorPlayback(events, sensors.map(d => d.SpaceID.trim()));
   const clock = document.querySelector('#clock');
@@ -169,7 +263,7 @@ function startPlayback(events, sensors, points, initiallyPlaying = true, soundVi
       if (!soundEnabled) { sound?.clear(); return; }
       try {
         if (!sound) {
-          sound = new ParkingSound();
+          sound = createParkingSound();
         }
         if (playing) await sound.resume();
       } catch (error) {
