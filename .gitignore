@@ -1,0 +1,6 @@
+.DS_Store
+.playwright-mcp/
+.env
+.env.*
+!.env.example
+node_modules/

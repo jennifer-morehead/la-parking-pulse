@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LA Parking Pulse</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js?v=ugotme-trim-5" defer></script>
+</head>
+<body>
+  <main class="recording-frame">
+    <header>
+      <div class="heading">
+        <h1 id="area-name">Los Angeles</h1>
+        <p id="context">LA DOT parking sensor data</p>
+      </div>
+      <div class="playback">
+        <time id="clock">00:00:00</time>
+        <div class="date">August 11, 2026 · Local time</div>
+      </div>
+      <div class="zoom-controls"><button id="enter-area" disabled>Zoom in</button>
+      <button id="back" hidden>Zoom out</button></div>
+    </header>
+    <nav id="area-selector" hidden aria-label="Choose parking view"></nav>
+    <details id="comparison-note" hidden><summary aria-label="About comparison views">View info ⓘ</summary><p>All areas share the same map scale. Select a panel to explore.</p></details>
+    <section class="map-wrap" aria-label="Geographic exploration">
+      <svg id="map" role="img" aria-label="Los Angeles parking sensor coverage, north up"></svg>
+      <div id="neighborhood-grid" hidden aria-label="Synchronized neighborhood parking views"></div>
+      <div id="locator-wrap" hidden><svg id="locator" viewBox="0 0 120 180" role="img" aria-label="Current viewing window within Los Angeles"></svg><span>LOS ANGELES</span></div>
+    </section>
+    <footer>
+      <div class="playback-controls">
+        <button id="sound-toggle" disabled aria-label="Enable sound" aria-pressed="false">Sound off</button>
+        <button id="play-pause" disabled aria-label="Play" title="Play">▶</button>
+        <button id="restart" disabled aria-label="Restart" title="Restart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9a8 8 0 1 1 0 6M4 3v6h6"/></svg></button>
+      </div>
+      <p class="legend"><span class="key vacant-key"></span> Vacant <span class="key occupied-key"></span> Occupied</p>
+      <p id="status" role="status">Loading visualization…</p>
+      <div class="brand">edge.cse</div>
+    </footer>
+  </main>
+</body>
+</html>
