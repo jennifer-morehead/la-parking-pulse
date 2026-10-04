@@ -83,6 +83,8 @@ class ParkingSound {
     this.audio.preservesPitch = true;
     this.audio.webkitPreservesPitch = true;
     this.rate = 1;
+    this.appliedRate = 1;
+    this.lastRateUpdate = null;
     this.previousPulse = null;
     this.starting = false;
     this.wanted = false;
@@ -94,6 +96,8 @@ class ParkingSound {
     if (reset) {
       if (this.audio.currentTime > 0) this.audio.currentTime = 0;
       this.rate = 1;
+      this.appliedRate = 1;
+      this.lastRateUpdate = null;
       this.audio.playbackRate = 1;
     }
   }
@@ -116,7 +120,17 @@ class ParkingSound {
     const elapsed = this.previousPulse === null ? 16 : Math.min(100, Math.max(0, now - this.previousPulse));
     this.previousPulse = now;
     this.rate += (target - this.rate) * (1 - Math.exp(-elapsed / 250));
-    this.audio.playbackRate = this.rate;
+    // WebKit can interrupt audio on each playbackRate assignment. Keep the
+    // occupancy smoothing, but apply meaningful changes at most twice a second
+    // and only after playback has started.
+    const nextRate = Math.round(this.rate * 50) / 50;
+    if (!this.audio.paused && !this.starting &&
+        (this.lastRateUpdate === null || now - this.lastRateUpdate >= 500) &&
+        Math.abs(nextRate - this.appliedRate) >= 0.019) {
+      this.audio.playbackRate = nextRate;
+      this.appliedRate = nextRate;
+      this.lastRateUpdate = now;
+    }
     if (this.audio.paused && !this.starting) this.resume().catch(() => {});
   }
 }

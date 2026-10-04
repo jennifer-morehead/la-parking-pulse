@@ -33,10 +33,20 @@ async function main() {
   assert.equal(audio.paused, true, 'No autoplay before enable and Play');
   await sound.resume();
   assert.equal(audio.paused, false);
+  const rateWrites = [];
+  let playbackRate = 1;
+  Object.defineProperty(audio, 'playbackRate', {
+    get() { return playbackRate; },
+    set(value) { playbackRate = value; rateWrites.push(value); }
+  });
   for (let now = 0; now < 2000; now += 20) sound.pulse({ratio: 0}, now);
   assert(Math.abs(audio.playbackRate - 0.8) < 0.001);
   for (let now = 2000; now < 4000; now += 20) sound.pulse({ratio: 1}, now);
   assert(Math.abs(audio.playbackRate - 1.4) < 0.001);
+  assert(rateWrites.length <= 8, 'Speed changes are limited to twice per second');
+  const settledWrites = rateWrites.length;
+  for (let now = 4000; now < 6000; now += 20) sound.pulse({ratio: 1}, now);
+  assert.equal(rateWrites.length, settledWrites, 'Stable occupancy does not repeatedly reset media speed');
   assert.equal(audio.volume, 0.65, 'Speed changes preserve volume');
   audio.currentTime = 19;
   sound.clear();
